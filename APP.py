@@ -86,7 +86,7 @@ st.image("prostate_cancer_banner.jpg", caption="High-Risk Prostate Cancer Progre
 # =========================
 # Load model and data
 # =========================
-MODEL_PATH = "saved_models/MLP_best.pkl"   # 若模型不在此路径，请改成实际路径
+MODEL_PATH = "MLP_best.pkl"   # 若模型不在此路径，请改成实际路径
 DATA_FILE = "Final_Cleaned_Data.xlsx"
 TARGET_COL = "status"
 ID_COL = "ID"
