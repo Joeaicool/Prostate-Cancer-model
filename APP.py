@@ -80,13 +80,13 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Hero image（先占位，后续你替换成真实图片文件名）
+# Hero image
 st.image("prostate_cancer_banner.jpg", caption="High-Risk Prostate Cancer Progression", use_container_width=True)
 
 # =========================
 # Load model and data
 # =========================
-MODEL_PATH = "MLP_best.pkl"   # 若模型不在此路径，请改成实际路径
+MODEL_PATH = "MLP_best.pkl"  # 如果你放在 saved_models 目录，改成 "saved_models/MLP_best.pkl"
 DATA_FILE = "Final_Cleaned_Data.xlsx"
 TARGET_COL = "status"
 ID_COL = "ID"
@@ -192,29 +192,40 @@ if st.button("Predict", type="primary", use_container_width=True):
     st.markdown('<div class="card"><b>Explainability (SHAP)</b></div>', unsafe_allow_html=True)
 
     try:
-        # MLP 通常更稳妥用 KernelExplainer
+        # MLP: 用 KernelExplainer 更稳
         bg = shap.sample(df_feat[FEATURES], min(100, len(df_feat)), random_state=42)
         explainer = shap.KernelExplainer(model.predict_proba, bg)
-        shap_values = explainer.shap_values(X_input)
 
+        shap_values = explainer.shap_values(X_input, nsamples=200)
+
+        # 统一抽取正类(1)单样本SHAP向量 -> (n_features,)
         if isinstance(shap_values, list):
-            sv_class1 = shap_values[1][0]
-            expected_vals = explainer.expected_value
-            base_class1 = expected_vals[1] if isinstance(expected_vals, (list, np.ndarray)) else float(expected_vals)
+            sv_class1 = np.array(shap_values[1])[0]
+            ev = explainer.expected_value
+            base_class1 = ev[1] if isinstance(ev, (list, np.ndarray)) else float(ev)
         else:
-            sv_class1 = shap_values[0]
-            base_class1 = explainer.expected_value if np.isscalar(explainer.expected_value) else explainer.expected_value[0]
+            arr = np.array(shap_values)
+            if arr.ndim == 3:
+                sv_class1 = arr[0, :, 1]
+            elif arr.ndim == 2:
+                sv_class1 = arr[0]
+            else:
+                raise ValueError(f"Unexpected SHAP shape: {arr.shape}")
+
+            ev = explainer.expected_value
+            base_class1 = ev[1] if isinstance(ev, (list, np.ndarray)) else float(ev)
+
+        exp = shap.Explanation(
+            values=sv_class1,
+            base_values=base_class1,
+            data=X_input.iloc[0].values,
+            feature_names=FEATURES
+        )
 
         p1, p2 = st.columns(2)
 
         with p1:
             st.markdown("**SHAP Waterfall Plot**")
-            exp = shap.Explanation(
-                values=sv_class1,
-                base_values=base_class1,
-                data=X_input.iloc[0].values,
-                feature_names=FEATURES
-            )
             fig_wf = plt.figure(figsize=(8, 4.2), dpi=200)
             shap.plots.waterfall(exp, max_display=min(10, len(FEATURES)), show=False)
             st.pyplot(fig_wf, use_container_width=True)
@@ -276,8 +287,8 @@ if st.button("Predict", type="primary", use_container_width=True):
 st.markdown(
     """
     <div class="footer">
-        <b>Author:</b> Zhiping Meng<br>
-        <b>Affiliation:</b> Guigang People's Hospital, Guigang, China
+        <b>Author:</b> Sheng Liang<br>
+        <b>Affiliation:</b> Hengzhou City People's Hospital, Hengzhou, Guangxi, China
     </div>
     """,
     unsafe_allow_html=True
