@@ -75,33 +75,42 @@ st.markdown(
     <div class="subtitle-box">
     <b>Clinical Objective:</b> Predict individual future risk of progression to 
     <b>high-risk prostate cancer</b> (positive class = 1) using explainable machine learning.
+    <br><br>
+    <i>Note: The Random Forest (RF) model is highly recommended for patients with tPSA falling into the diagnostic gray zone (4.0 - 10.0 ng/mL).</i>
     </div>
     """,
     unsafe_allow_html=True
 )
 
-# Hero image
-st.image("prostate_cancer_banner.jpg", caption="High-Risk Prostate Cancer Progression", use_container_width=True)
+# Hero image (确保目录下有这张图，没有的话会忽略)
+try:
+    st.image("prostate_cancer_banner.jpg", caption="High-Risk Prostate Cancer Progression", use_column_width=True)
+except:
+    pass
 
 # =========================
-# Load model and data
+# Setup Models and Data
 # =========================
-MODEL_PATH = "MLP_best.pkl"  # 如果你放在 saved_models 目录，改成 "saved_models/MLP_best.pkl"
+# 定义模型路径字典
+MODEL_DICT = {
+    "Random Forest (RF) - Recommended for PSA Gray Zone (4-10)": "RF_best.pkl",
+    "Multilayer Perceptron (MLP)": "MLP_best.pkl"
+}
+
 DATA_FILE = "Final_Cleaned_Data.xlsx"
 TARGET_COL = "status"
 ID_COL = "ID"
-
 FEATURES = ['tPSA', 'CK_MB', 'LDH', 'RBC']
 
 @st.cache_resource
-def load_model():
-    return joblib.load(MODEL_PATH)
+def load_model(model_path):
+    # 这里加载模型，如果报错提示找不到，请检查路径是否正确，如 "saved_models/RF_best.pkl"
+    return joblib.load(model_path)
 
 @st.cache_data
 def load_data():
     return pd.read_excel(DATA_FILE)
 
-model = load_model()
 df = load_data()
 
 if ID_COL in df.columns:
@@ -110,9 +119,19 @@ else:
     df_feat = df.drop(columns=[TARGET_COL], errors="ignore")
 
 # =========================
-# Input panel
+# Model Selection & Input panel
 # =========================
-st.markdown('<div class="card"><b>Patient Feature Input</b></div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><b>1. Select Predictive Model</b></div>', unsafe_allow_html=True)
+selected_model_name = st.selectbox(
+    "Choose the machine learning algorithm:",
+    list(MODEL_DICT.keys()),
+    index=0 # 默认选中第一个 (RF)
+)
+current_model_path = MODEL_DICT[selected_model_name]
+model = load_model(current_model_path)
+
+
+st.markdown('<div class="card"><b>2. Patient Feature Input</b></div>', unsafe_allow_html=True)
 
 feature_ranges = {}
 for f in FEATURES:
@@ -154,7 +173,13 @@ X_input = pd.DataFrame([vals], columns=FEATURES)
 # =========================
 # Prediction + Visualization
 # =========================
-if st.button("Predict", type="primary", use_container_width=True):
+if st.button(f"Predict with {selected_model_name.split(' ')[0]}", type="primary", use_container_width=True):
+    
+    # 灰区提醒逻辑
+    tpsa_val = X_input['tPSA'].values[0]
+    if (4.0 <= tpsa_val <= 10.0) and ("MLP" in selected_model_name):
+        st.warning("⚠️ **Clinical Notice:** The patient's tPSA is in the gray zone (4.0 - 10.0 ng/mL). According to our study, the Random Forest (RF) model demonstrates superior discriminative accuracy in this specific cohort. Consider switching to the RF model above.")
+
     pred = model.predict(X_input)[0]
     proba_pos = model.predict_proba(X_input)[0][1] * 100 if hasattr(model, "predict_proba") else 0.0
 
@@ -192,91 +217,92 @@ if st.button("Predict", type="primary", use_container_width=True):
     st.markdown('<div class="card"><b>Explainability (SHAP)</b></div>', unsafe_allow_html=True)
 
     try:
-        # MLP: 用 KernelExplainer 更稳
-        bg = shap.sample(df_feat[FEATURES], min(100, len(df_feat)), random_state=42)
-        explainer = shap.KernelExplainer(model.predict_proba, bg)
+        with st.spinner('Generating explainability plots...'):
+            # 使用 KernelExplainer 兼容所有模型
+            bg = shap.sample(df_feat[FEATURES], min(100, len(df_feat)), random_state=42)
+            explainer = shap.KernelExplainer(model.predict_proba, bg)
 
-        shap_values = explainer.shap_values(X_input, nsamples=200)
+            shap_values = explainer.shap_values(X_input, nsamples=200)
 
-        # 统一抽取正类(1)单样本SHAP向量 -> (n_features,)
-        if isinstance(shap_values, list):
-            sv_class1 = np.array(shap_values[1])[0]
-            ev = explainer.expected_value
-            base_class1 = ev[1] if isinstance(ev, (list, np.ndarray)) else float(ev)
-        else:
-            arr = np.array(shap_values)
-            if arr.ndim == 3:
-                sv_class1 = arr[0, :, 1]
-            elif arr.ndim == 2:
-                sv_class1 = arr[0]
+            # 统一抽取正类(1)单样本SHAP向量 -> (n_features,)
+            if isinstance(shap_values, list):
+                sv_class1 = np.array(shap_values[1])[0]
+                ev = explainer.expected_value
+                base_class1 = ev[1] if isinstance(ev, (list, np.ndarray)) else float(ev)
             else:
-                raise ValueError(f"Unexpected SHAP shape: {arr.shape}")
+                arr = np.array(shap_values)
+                if arr.ndim == 3:
+                    sv_class1 = arr[0, :, 1]
+                elif arr.ndim == 2:
+                    sv_class1 = arr[0]
+                else:
+                    raise ValueError(f"Unexpected SHAP shape: {arr.shape}")
 
-            ev = explainer.expected_value
-            base_class1 = ev[1] if isinstance(ev, (list, np.ndarray)) else float(ev)
+                ev = explainer.expected_value
+                base_class1 = ev[1] if isinstance(ev, (list, np.ndarray)) else float(ev)
 
-        exp = shap.Explanation(
-            values=sv_class1,
-            base_values=base_class1,
-            data=X_input.iloc[0].values,
-            feature_names=FEATURES
-        )
-
-        p1, p2 = st.columns(2)
-
-        with p1:
-            st.markdown("**SHAP Waterfall Plot**")
-            fig_wf = plt.figure(figsize=(8, 4.2), dpi=200)
-            shap.plots.waterfall(exp, max_display=min(10, len(FEATURES)), show=False)
-            st.pyplot(fig_wf, use_container_width=True)
-            plt.close(fig_wf)
-
-        with p2:
-            st.markdown("**SHAP Force Plot**")
-            fig_force = plt.figure(figsize=(8, 4.2), dpi=200)
-            shap.force_plot(
-                base_class1,
-                sv_class1,
-                X_input.iloc[0],
-                feature_names=FEATURES,
-                matplotlib=True,
-                show=False
+            exp = shap.Explanation(
+                values=sv_class1,
+                base_values=base_class1,
+                data=X_input.iloc[0].values,
+                feature_names=FEATURES
             )
-            st.pyplot(fig_force, use_container_width=True)
-            plt.close(fig_force)
 
-        st.markdown("**Feature Contribution Table**")
-        abs_sv = np.abs(sv_class1)
-        total = abs_sv.sum() if abs_sv.sum() != 0 else 1.0
-        pct = abs_sv / total * 100
+            p1, p2 = st.columns(2)
 
-        contribution_df = pd.DataFrame({
-            "Feature": FEATURES,
-            "Input Value": X_input.iloc[0].values,
-            "SHAP Value": sv_class1,
-            "Direction": ["Increase progression risk" if v > 0 else "Decrease progression risk" for v in sv_class1],
-            "Contribution (%)": pct
-        }).sort_values("Contribution (%)", ascending=False)
+            with p1:
+                st.markdown("**SHAP Waterfall Plot**")
+                fig_wf = plt.figure(figsize=(8, 4.2), dpi=200)
+                shap.plots.waterfall(exp, max_display=min(10, len(FEATURES)), show=False)
+                st.pyplot(fig_wf, use_container_width=True)
+                plt.close(fig_wf)
 
-        st.dataframe(
-            contribution_df.style.format({
-                "Input Value": "{:.4f}",
-                "SHAP Value": "{:.4f}",
-                "Contribution (%)": "{:.2f}"
-            }),
-            use_container_width=True
-        )
+            with p2:
+                st.markdown("**SHAP Force Plot**")
+                fig_force = plt.figure(figsize=(8, 4.2), dpi=200)
+                shap.force_plot(
+                    base_class1,
+                    sv_class1,
+                    X_input.iloc[0],
+                    feature_names=FEATURES,
+                    matplotlib=True,
+                    show=False
+                )
+                st.pyplot(fig_force, use_container_width=True)
+                plt.close(fig_force)
 
-        st.markdown("**Contribution Bar Chart**")
-        fig_bar, ax = plt.subplots(figsize=(9, 4), dpi=220)
-        bar_colors = ["#E53935" if v > 0 else "#1E88E5" for v in contribution_df["SHAP Value"]]
-        ax.barh(contribution_df["Feature"], contribution_df["SHAP Value"], color=bar_colors)
-        ax.axvline(0, color="black", linewidth=1)
-        ax.set_xlabel("SHAP value")
-        ax.set_title("Red: increase progression risk | Blue: decrease progression risk")
-        ax.invert_yaxis()
-        st.pyplot(fig_bar, use_container_width=True)
-        plt.close(fig_bar)
+            st.markdown("**Feature Contribution Table**")
+            abs_sv = np.abs(sv_class1)
+            total = abs_sv.sum() if abs_sv.sum() != 0 else 1.0
+            pct = abs_sv / total * 100
+
+            contribution_df = pd.DataFrame({
+                "Feature": FEATURES,
+                "Input Value": X_input.iloc[0].values,
+                "SHAP Value": sv_class1,
+                "Direction": ["Increase progression risk" if v > 0 else "Decrease progression risk" for v in sv_class1],
+                "Contribution (%)": pct
+            }).sort_values("Contribution (%)", ascending=False)
+
+            st.dataframe(
+                contribution_df.style.format({
+                    "Input Value": "{:.4f}",
+                    "SHAP Value": "{:.4f}",
+                    "Contribution (%)": "{:.2f}"
+                }),
+                use_container_width=True
+            )
+
+            st.markdown("**Contribution Bar Chart**")
+            fig_bar, ax = plt.subplots(figsize=(9, 4), dpi=220)
+            bar_colors = ["#E53935" if v > 0 else "#1E88E5" for v in contribution_df["SHAP Value"]]
+            ax.barh(contribution_df["Feature"], contribution_df["SHAP Value"], color=bar_colors)
+            ax.axvline(0, color="black", linewidth=1)
+            ax.set_xlabel("SHAP value")
+            ax.set_title("Red: increase progression risk | Blue: decrease progression risk")
+            ax.invert_yaxis()
+            st.pyplot(fig_bar, use_container_width=True)
+            plt.close(fig_bar)
 
     except Exception as e:
         st.warning(f"SHAP visualization failed: {e}")
